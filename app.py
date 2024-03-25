@@ -34,6 +34,8 @@ import json
 import boto3
 from boto3.dynamodb.conditions import Attr
 
+# EC2
+# app = Flask(__name__, template_folder='/home/ubuntu/photogallery2/Templates', static_url_path="")
 app = Flask(__name__, static_url_path="")
 
 app.secret_key = APP_KEY
