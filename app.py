@@ -33,6 +33,9 @@ import exifread
 import json
 from pymongo import MongoClient
 
+# EC2
+# app = Flask(__name__, template_folder='/home/ubuntu/photogallery2/Templates', static_url_path="")
+
 app = Flask(__name__, static_url_path="")
 
 app.secret_key = APP_KEY
@@ -204,6 +207,7 @@ def search_page():
     filtered_items = [item for item in items if item.get('UserID') == session.get('user')]
 
     return render_template('search.html', photos=filtered_items, searchquery=query)
+
 
 if __name__ == '__main__':
     app.run(debug=True, host="0.0.0.0", port=5000)
