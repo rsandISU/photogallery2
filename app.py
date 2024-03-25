@@ -21,18 +21,17 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
-
+import boto3
 # !flask/bin/python
 from flask import Flask, jsonify, request, make_response
 from flask import render_template, redirect, session
-from passwords import ACCESS_KEY, SECRET_KEY, BUCKET, APP_KEY, INSTANCE_REGION
+from passwords import ACCESS_KEY, SECRET_KEY, BUCKET, APP_KEY, INSTANCE_REGION, MONGO_KEY
 import os
 import time
 import datetime
 import exifread
 import json
-import boto3
-from boto3.dynamodb.conditions import Attr
+from pymongo import MongoClient
 
 app = Flask(__name__, static_url_path="")
 
@@ -46,13 +45,12 @@ AWS_SECRET_KEY = SECRET_KEY
 REGION = INSTANCE_REGION
 BUCKET_NAME = BUCKET
 
-dynamodb = boto3.resource('dynamodb', aws_access_key_id=AWS_ACCESS_KEY,
-                          aws_secret_access_key=AWS_SECRET_KEY,
-                          region_name=REGION)
-
-table = dynamodb.Table('PhotoGallery')
-
-users = dynamodb.Table('Users')
+# Connect to MongoDB
+MONGODB_CONNECTION_STRING = MONGO_KEY
+client = MongoClient(MONGODB_CONNECTION_STRING)
+db = client.get_database('project2')
+table = db['photos']
+users = db['users']
 
 
 def allowed_file(filename):
@@ -100,79 +98,50 @@ def s3uploading(filename, filename_with_path):
 
 @app.route('/', methods=['GET', 'POST'])
 def home_page():
-    # Check if the user is logged in
     if 'logged_in' in session and session['logged_in']:
-        # If logged in, render the home page or any other desired page
-        response = table.scan()
+        response = table.find()
 
-        items = response['Items']
+        items = list(response)
 
-        # Filter items based on whether the UserID matches the session['user']
         filtered_items = [item for item in items if item.get('UserID') == session.get('user')]
-
-        print(filtered_items)
 
         return render_template('index.html', photos=filtered_items)
     else:
-        # If not logged in, redirect to the login page
         return redirect('/login')
 
 
-# Login route
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-
     if request.method == 'POST':
-
         if 'newusername' in request.form and 'newpassword' in request.form:
-
             newusername = request.form['newusername']
             newpassword = request.form['newpassword']
 
             if newusername != "" and newpassword != "":
-                users.put_item(
-                    Item={
-                        "UserID": newusername,
-                        "Password": newpassword
+                users.insert_one({
+                    "UserID": newusername,
+                    "Password": newpassword
+                })
 
-                    }
-                )
-
-                # Set the 'logged_in' session variable to True
                 session['logged_in'] = True
                 session['user'] = newusername
                 session['pass'] = newpassword
-                # Redirect to the home page or any other desired page after successful login
                 return redirect('/')
 
         if 'username' in request.form and 'password' in request.form:
             username = request.form['username']
             password = request.form['password']
 
-        # Check if the provided username and password match any hardcoded credentials
-        try:
-            response = users.get_item(
-                Key={
-                    'UserID': username
-                }
-            )
-            item = response.get('Item')
-            if item and item.get('Password') == password:
-                # Set the 'logged_in' session variable to True
+            user = users.find_one({'UserID': username})
+            if user and user.get('Password') == password:
                 session['logged_in'] = True
                 session['user'] = username
                 session['pass'] = password
-                # Redirect to the home page or any other desired page after successful login
                 return redirect('/')
             else:
-                # If the credentials are incorrect, render the login page again with an error message
                 return render_template('login.html', error='Invalid username or password')
-        except Exception as e:
-            print(f"An error occurred: {str(e)}")
-            return render_template('login.html', error='An error occurred. Please try again later.')
-    else:
-        # If it's a GET request, render the login page
-        return render_template('login.html')
+
+    return render_template('login.html')
 
 
 @app.route('/add', methods=['GET', 'POST'])
@@ -183,31 +152,26 @@ def add_photo():
         tags = request.form['tags']
         description = request.form['description']
 
-        print(title, tags, description)
         if file and allowed_file(file.filename):
             filename = file.filename
             filename_with_path = os.path.join(UPLOAD_FOLDER, filename)
-            print(filename_with_path)
             file.save(filename_with_path)
             uploaded_file_url = s3uploading(filename, filename_with_path)
             exif_data = get_exif_data(filename_with_path)
-            print(exif_data)
             ts = time.time()
             timestamp = datetime.datetime. \
                 fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
 
-            table.put_item(
-                Item={
-                    "PhotoGalleryKey": str(int(ts * 1000)),
-                    "CreationTime": timestamp,
-                    "Title": title,
-                    "Description": description,
-                    "Tags": tags,
-                    "URL": uploaded_file_url,
-                    "ExifData": json.dumps(exif_data),
-                    "UserID": session["user"]
-                }
-            )
+            table.insert_one({
+                "PhotoGalleryKey": str(int(ts * 1000)),
+                "CreationTime": timestamp,
+                "Title": title,
+                "Description": description,
+                "Tags": tags,
+                "URL": uploaded_file_url,
+                "ExifData": json.dumps(exif_data),
+                "UserID": session["user"]
+            })
 
         return redirect('/')
     else:
@@ -215,36 +179,31 @@ def add_photo():
 
 
 @app.route('/<int:photoID>', methods=['GET'])
-def view_photo(photo_id):
-    response = table.scan(
-        FilterExpression=Attr('PhotoID').eq(str(photo_id))
-    )
-
-    items = response['Items']
-    print(items[0])
-    tags = items[0]['Tags'].split(',')
-    exif_data = json.loads(items[0]['ExifData'])
-
-    return render_template('photodetail.html', photo=items[0], tags=tags, exifdata=exif_data)
+def view_photo(photoID):
+    photo = table.find_one({"PhotoGalleryKey": str(photoID)})
+    if photo:
+        tags = photo['Tags'].split(',')
+        exif_data = json.loads(photo['ExifData'])
+        return render_template('photodetail.html', photo=photo, tags=tags, exifdata=exif_data)
+    else:
+        return not_found(None)
 
 
 @app.route('/search', methods=['GET'])
 def search_page():
     query = request.args.get('query', None)
 
-    response = table.scan(
-        FilterExpression=Attr('Title').contains(str(query)) |
-        Attr('Description').contains(str(query)) |
-        Attr('Tags').contains(str(query))
-    )
-    items = response['Items']
+    items = table.find({
+        "$or": [
+            {"Title": {"$regex": query, "$options": "i"}},
+            {"Description": {"$regex": query, "$options": "i"}},
+            {"Tags": {"$regex": query, "$options": "i"}}
+        ]
+    })
 
-    # Filter items based on whether the UserID matches the session['user']
     filtered_items = [item for item in items if item.get('UserID') == session.get('user')]
 
-    return render_template('search.html',
-                           photos=filtered_items, searchquery=query)
-
+    return render_template('search.html', photos=filtered_items, searchquery=query)
 
 if __name__ == '__main__':
     app.run(debug=True, host="0.0.0.0", port=5000)
