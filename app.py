@@ -1,252 +1,138 @@
 """
-MIT License
-
-Copyright (c) 2019 Arshdeep Bahga and Vijay Madisetti
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Flask application for a photo gallery, rewritten to interface with Google Cloud Platform technologies.
 """
 
-# !flask/bin/python
-from flask import Flask, jsonify, request, make_response
-from flask import render_template, redirect, session
-from passwords import ACCESS_KEY, SECRET_KEY, BUCKET, APP_KEY, INSTANCE_REGION
+from flask import (
+    Flask,
+    jsonify,
+    request,
+    make_response,
+    render_template,
+    redirect,
+    session,
+)
+from google.cloud import storage, secretmanager
+from google.cloud.sql.connector import Connector, IPTypes
+from sqlalchemy import create_engine
 import os
 import time
 import datetime
 import exifread
 import json
-import boto3
-from boto3.dynamodb.conditions import Attr
 
-# EC2
-# app = Flask(__name__, template_folder='/home/ubuntu/photogallery2/Templates', static_url_path="")
+# Flask app configuration
 app = Flask(__name__, static_url_path="")
+app.secret_key = os.getenv("APP_KEY")
 
-app.secret_key = APP_KEY
+# Google Cloud Platform configuration
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
+GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
+CLOUD_SQL_CONNECTION_NAME = os.getenv("CLOUD_SQL_CONNECTION_NAME")
+CLOUD_SQL_DB_NAME = os.getenv("CLOUD_SQL_DB_NAME")
+CLOUD_SQL_USER = os.getenv("CLOUD_SQL_USER")
+CLOUD_SQL_PASSWORD = os.getenv("CLOUD_SQL_PASSWORD")
 
-UPLOAD_FOLDER = os.path.join(app.root_path, 'static', 'media')
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
-BASE_URL = "http://localhost:5000/media/"
-AWS_ACCESS_KEY = ACCESS_KEY
-AWS_SECRET_KEY = SECRET_KEY
-REGION = INSTANCE_REGION
-BUCKET_NAME = BUCKET
+# Cloud Storage client
+storage_client = storage.Client()
+bucket = storage_client.bucket(GCS_BUCKET_NAME)
 
-dynamodb = boto3.resource('dynamodb', aws_access_key_id=AWS_ACCESS_KEY,
-                          aws_secret_access_key=AWS_SECRET_KEY,
-                          region_name=REGION)
-
-table = dynamodb.Table('PhotoGallery')
-
-users = dynamodb.Table('Users')
+# Cloud SQL connection using Google's Cloud SQL Connector
+connector = Connector()
 
 
+def getconn() -> sqlalchemy.engine.base.Connection:
+    conn: sqlalchemy.engine.base.Connection = connector.connect(
+        CLOUD_SQL_CONNECTION_NAME,
+        "pg8000",
+        user=CLOUD_SQL_USER,
+        password=CLOUD_SQL_PASSWORD,
+        db=CLOUD_SQL_DB_NAME,
+        ip_type=IPTypes.PRIVATE,
+    )
+    return conn
+
+
+# SQLAlchemy engine for interacting with the database
+engine = create_engine("postgresql+pg8000://", creator=getconn)
+
+
+# Helper functions
 def allowed_file(filename):
-    return '.' in filename and \
-           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in {
+        "png",
+        "jpg",
+        "jpeg",
+    }
 
 
-@app.errorhandler(400)
-def bad_request(error):
-    return make_response(jsonify({'error': 'Bad request'}), 400)
+def upload_file_to_gcs(file, filename):
+    blob = bucket.blob(filename)
+    blob.upload_from_file(file)
+    return f"https://storage.googleapis.com/{GCS_BUCKET_NAME}/{filename}"
 
 
-@app.errorhandler(404)
-def not_found(error):
-    return make_response(jsonify({'error': 'Not found'}), 404)
+def get_exif_data(file_path):
+    with open(file_path, "rb") as file:
+        tags = exifread.process_file(file)
+    return {
+        tag: str(tags[tag])
+        for tag in tags
+        if tag not in ("JPEGThumbnail", "TIFFThumbnail", "Filename", "EXIF MakerNote")
+    }
 
 
-def get_exif_data(path_name):
-    f = open(path_name, 'rb')
-    tags = exifread.process_file(f)
-    exif_data = {}
-    for tag in tags.keys():
-        if tag not in ('JPEGThumbnail', 'TIFFThumbnail',
-                       'Filename', 'EXIF MakerNote'):
-            key = "%s" % tag
-            val = "%s" % (tags[tag])
-            exif_data[key] = val
-    return exif_data
-
-
-def s3uploading(filename, filename_with_path):
-    s3 = boto3.client('s3', aws_access_key_id=AWS_ACCESS_KEY,
-                      aws_secret_access_key=AWS_SECRET_KEY)
-
-    bucket = BUCKET_NAME
-    path_filename = "photos/" + filename
-    print(path_filename)
-    s3.upload_file(filename_with_path, bucket, path_filename)
-    s3.put_object_acl(ACL='public-read',
-                      Bucket=bucket, Key=path_filename)
-
-    return "https://" + BUCKET_NAME + \
-           ".s3.us-east-2.amazonaws.com/" + path_filename
-
-
-@app.route('/', methods=['GET', 'POST'])
-def home_page():
-    # Check if the user is logged in
-    if 'logged_in' in session and session['logged_in']:
-        # If logged in, render the home page or any other desired page
-        response = table.scan()
-
-        items = response['Items']
-
-        # Filter items based on whether the UserID matches the session['user']
-        filtered_items = [item for item in items if item.get('UserID') == session.get('user')]
-
-        print(filtered_items)
-
-        return render_template('index.html', photos=filtered_items)
-    else:
-        # If not logged in, redirect to the login page
-        return redirect('/login')
-
-
-# Login route
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-
-    if request.method == 'POST':
-
-        if 'newusername' in request.form and 'newpassword' in request.form:
-
-            newusername = request.form['newusername']
-            newpassword = request.form['newpassword']
-
-            if newusername != "" and newpassword != "":
-                users.put_item(
-                    Item={
-                        "UserID": newusername,
-                        "Password": newpassword
-
-                    }
-                )
-
-                # Set the 'logged_in' session variable to True
-                session['logged_in'] = True
-                session['user'] = newusername
-                session['pass'] = newpassword
-                # Redirect to the home page or any other desired page after successful login
-                return redirect('/')
-
-        if 'username' in request.form and 'password' in request.form:
-            username = request.form['username']
-            password = request.form['password']
-
-        # Check if the provided username and password match any hardcoded credentials
-        try:
-            response = users.get_item(
-                Key={
-                    'UserID': username
-                }
-            )
-            item = response.get('Item')
-            if item and item.get('Password') == password:
-                # Set the 'logged_in' session variable to True
-                session['logged_in'] = True
-                session['user'] = username
-                session['pass'] = password
-                # Redirect to the home page or any other desired page after successful login
-                return redirect('/')
-            else:
-                # If the credentials are incorrect, render the login page again with an error message
-                return render_template('login.html', error='Invalid username or password')
-        except Exception as e:
-            print(f"An error occurred: {str(e)}")
-            return render_template('login.html', error='An error occurred. Please try again later.')
-    else:
-        # If it's a GET request, render the login page
-        return render_template('login.html')
-
-
-@app.route('/add', methods=['GET', 'POST'])
-def add_photo():
-    if request.method == 'POST':
-        file = request.files['imagefile']
-        title = request.form['title']
-        tags = request.form['tags']
-        description = request.form['description']
-
-        print(title, tags, description)
+# Flask routes
+@app.route("/", methods=["GET", "POST"])
+def upload_photo():
+    if request.method == "POST":
+        file = request.files["file"]
         if file and allowed_file(file.filename):
-            filename = file.filename
-            filename_with_path = os.path.join(UPLOAD_FOLDER, filename)
-            print(filename_with_path)
-            file.save(filename_with_path)
-            uploaded_file_url = s3uploading(filename, filename_with_path)
-            exif_data = get_exif_data(filename_with_path)
-            print(exif_data)
+            filename = secure_filename(file.filename)
+            file_url = upload_file_to_gcs(file, filename)
+            exif_data = get_exif_data(file)
             ts = time.time()
-            timestamp = datetime.datetime. \
-                fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
-
-            table.put_item(
-                Item={
-                    "PhotoGalleryKey": str(int(ts * 1000)),
-                    "CreationTime": timestamp,
-                    "Title": title,
-                    "Description": description,
-                    "Tags": tags,
-                    "URL": uploaded_file_url,
-                    "ExifData": json.dumps(exif_data),
-                    "UserID": session["user"]
-                }
+            timestamp = datetime.datetime.fromtimestamp(ts).strftime(
+                "%Y-%m-%d %H:%M:%S"
             )
 
-        return redirect('/')
+            # Insert metadata into Cloud SQL database
+            with engine.connect() as conn:
+                conn.execute(
+                    "INSERT INTO photos (creation_time, title, description, tags, url, exif_data, user_id) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        timestamp,
+                        request.form["title"],
+                        request.form["description"],
+                        request.form["tags"],
+                        file_url,
+                        json.dumps(exif_data),
+                        session["user"],
+                    ),
+                )
+            return redirect("/")
     else:
-        return render_template('form.html')
+        return render_template("form.html")
 
 
-@app.route('/<int:photoID>', methods=['GET'])
+@app.route("/<int:photo_id>", methods=["GET"])
 def view_photo(photo_id):
-    response = table.scan(
-        FilterExpression=Attr('PhotoID').eq(str(photo_id))
-    )
-
-    items = response['Items']
-    print(items[0])
-    tags = items[0]['Tags'].split(',')
-    exif_data = json.loads(items[0]['ExifData'])
-
-    return render_template('photodetail.html', photo=items[0], tags=tags, exifdata=exif_data)
+    with engine.connect() as conn:
+        result = conn.execute("SELECT * FROM photos WHERE photo_id = %s", (photo_id,))
+        photo = result.fetchone()
+    return render_template("photodetail.html", photo=photo)
 
 
-@app.route('/search', methods=['GET'])
+@app.route("/search", methods=["GET"])
 def search_page():
-    query = request.args.get('query', None)
-
-    response = table.scan(
-        FilterExpression=Attr('Title').contains(str(query)) |
-        Attr('Description').contains(str(query)) |
-        Attr('Tags').contains(str(query))
-    )
-    items = response['Items']
-
-    # Filter items based on whether the UserID matches the session['user']
-    filtered_items = [item for item in items if item.get('UserID') == session.get('user')]
-
-    return render_template('search.html',
-                           photos=filtered_items, searchquery=query)
+    query = request.args.get("query", "")
+    with engine.connect() as conn:
+        result = conn.execute(
+            "SELECT * FROM photos WHERE title LIKE %s OR description LIKE %s OR tags LIKE %s",
+            ("%" + query + "%", "%" + query + "%", "%" + query + "%"),
+        )
+        photos = result.fetchall()
+    return render_template("search.html", photos=photos, searchquery=query)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)
