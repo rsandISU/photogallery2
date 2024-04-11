@@ -1,7 +1,4 @@
-"""
-Flask application for a photo gallery, rewritten to interface with Google Cloud Platform technologies.
-"""
-
+import sqlalchemy
 from flask import (
     Flask,
     jsonify,
@@ -11,28 +8,37 @@ from flask import (
     redirect,
     session,
 )
-from google.cloud import storage, secretmanager
-from google.cloud.sql.connector import Connector, IPTypes
+from google.cloud import storage
+from google.cloud.sql.connector import Connector, IPTypes, pymysql
 from sqlalchemy import create_engine
 import os
 import time
 import datetime
 import exifread
 import json
+import passwords
+
+
+from werkzeug.utils import secure_filename
 
 # Flask app configuration
 app = Flask(__name__, static_url_path="")
 app.secret_key = os.getenv("APP_KEY")
 
 # Google Cloud Platform configuration
-GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
-GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
-CLOUD_SQL_CONNECTION_NAME = os.getenv("CLOUD_SQL_CONNECTION_NAME")
-CLOUD_SQL_DB_NAME = os.getenv("CLOUD_SQL_DB_NAME")
-CLOUD_SQL_USER = os.getenv("CLOUD_SQL_USER")
-CLOUD_SQL_PASSWORD = os.getenv("CLOUD_SQL_PASSWORD")
+GCP_PROJECT_ID = passwords.GCP_PROJECT_ID
+GCS_BUCKET_NAME = passwords.GCS_BUCKET_NAME
+CLOUD_SQL_CONNECTION_NAME = passwords.CLOUD_SQL_CONNECTION_NAME
+CLOUD_SQL_DB_NAME = passwords.CLOUD_SQL_DB_NAME
+CLOUD_SQL_USER = passwords.CLOUD_SQL_USER
+CLOUD_SQL_PASSWORD = passwords.CLOUD_SQL_PASSWORD
 
 # Cloud Storage client
+
+# Set the environment variable to the path of your service account key
+#path = os.path.join("Users", "sandm", "Desktop", "SE_422", "project4-420017-bc05dbc2e8f3.json")
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "./project4-420017-bc05dbc2e8f3.json"
+
 storage_client = storage.Client()
 bucket = storage_client.bucket(GCS_BUCKET_NAME)
 
@@ -40,21 +46,29 @@ bucket = storage_client.bucket(GCS_BUCKET_NAME)
 connector = Connector()
 
 
-def getconn() -> sqlalchemy.engine.base.Connection:
-    conn: sqlalchemy.engine.base.Connection = connector.connect(
+connector = Connector()
+
+# function to return the database connection
+def getconn():
+    conn = connector.connect(
         CLOUD_SQL_CONNECTION_NAME,
-        "pg8000",
+        "pymysql",
         user=CLOUD_SQL_USER,
         password=CLOUD_SQL_PASSWORD,
-        db=CLOUD_SQL_DB_NAME,
-        ip_type=IPTypes.PRIVATE,
+        db=CLOUD_SQL_DB_NAME
     )
     return conn
 
+# create connection pool
+pool = sqlalchemy.create_engine(
+    "mysql+pymysql://",
+    creator=getconn,
+)
+
 
 # SQLAlchemy engine for interacting with the database
-engine = create_engine("postgresql+pg8000://", creator=getconn)
-
+#engine = create_engine("postgresql+pg8000://", creator=getconn)
+#engine = create_engine('mssql+pytds://', creator=getconn)
 
 # Helper functions
 def allowed_file(filename):
@@ -96,7 +110,7 @@ def upload_photo():
             )
 
             # Insert metadata into Cloud SQL database
-            with engine.connect() as conn:
+            with pool.connect() as conn:
                 conn.execute(
                     "INSERT INTO photos (creation_time, title, description, tags, url, exif_data, user_id) VALUES (%s, %s, %s, %s, %s, %s, %s)",
                     (
@@ -109,14 +123,14 @@ def upload_photo():
                         session["user"],
                     ),
                 )
-            return redirect("/")
+            return render_template("form.html")
     else:
         return render_template("form.html")
 
 
 @app.route("/<int:photo_id>", methods=["GET"])
 def view_photo(photo_id):
-    with engine.connect() as conn:
+    with pool.connect() as conn:
         result = conn.execute("SELECT * FROM photos WHERE photo_id = %s", (photo_id,))
         photo = result.fetchone()
     return render_template("photodetail.html", photo=photo)
@@ -125,7 +139,7 @@ def view_photo(photo_id):
 @app.route("/search", methods=["GET"])
 def search_page():
     query = request.args.get("query", "")
-    with engine.connect() as conn:
+    with pool.connect() as conn:
         result = conn.execute(
             "SELECT * FROM photos WHERE title LIKE %s OR description LIKE %s OR tags LIKE %s",
             ("%" + query + "%", "%" + query + "%", "%" + query + "%"),
