@@ -98,7 +98,7 @@ def allowed_file(filename):
 def upload_file_to_gcs(file, filename_with_path, filename):
     blob = bucket.blob(filename)
     blob.upload_from_file(file)
-    return f"https://storage.cloud.google.com/{bucket.name}/{filename}?authuser=3"
+    return f"https://storage.cloud.google.com/{bucket.name}/{filename}"
 
 
 
