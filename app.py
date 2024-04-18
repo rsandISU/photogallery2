@@ -1,5 +1,5 @@
 import MySQLdb
-import sqlalchemy
+#import sqlalchemy
 from flask import (
     Flask,
     jsonify,
@@ -10,8 +10,8 @@ from flask import (
     session,
 )
 from google.cloud import storage
-from google.cloud.sql.connector import Connector, IPTypes, pymysql
-from sqlalchemy import create_engine, insert, MetaData
+#from google.cloud.sql.connector import Connector, IPTypes, pymysql
+#from sqlalchemy import create_engine, insert, MetaData
 import os
 import time
 import datetime
@@ -20,7 +20,7 @@ import json
 import passwords
 
 
-from werkzeug.utils import secure_filename
+#from werkzeug.utils import secure_filename
 
 # Flask app configuration
 app = Flask(__name__, static_url_path="")
@@ -211,9 +211,10 @@ def view_photo(photoID):
     cursor.execute("SELECT * FROM photos WHERE PhotoID = %s", (str(photoID),))
     photo = cursor.fetchone()
     if photo:
-        tags = photo['Tags'].split(',')
-        exif_data = json.loads(photo['ExifData'])
-        return render_template('photodetail.html', photo=photo, tags=tags, exifdata=exif_data)
+        tags = photo[4].split(',')
+        exif_data = json.loads(photo[6])
+        url = photo[5]
+        return render_template('photodetail.html', photo=photo, tags=tags, exifdata=exif_data, URL=url)
     else:
         return not_found(None)
 
@@ -223,8 +224,18 @@ def search_page():
     cursor = db.cursor()
     cursor.execute("SELECT * FROM photos WHERE Title LIKE %s OR Description LIKE %s OR Tags LIKE %s", (f'%{query}%', f'%{query}%', f'%{query}%'))
     photos = cursor.fetchall()
-    filtered_items = [item for item in photos if item.get('UserID') == session.get('user')]
-    return render_template('search.html', photos=filtered_items, searchquery=query)
+    filtered_items = [item for item in photos if item[7] == session.get('user')]
+    items = []
+    for item in filtered_items:
+        photo = {}
+        photo['PhotoID'] = item[0]
+        photo['CreationTime'] = item[1]
+        photo['Title'] = item[2]
+        photo['Description'] = item[3]
+        photo['Tags'] = item[4]
+        photo['URL'] = item[5]
+        items.append(photo)
+    return render_template('search.html', photos=items, searchquery=query)
 
 
 
