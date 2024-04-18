@@ -17,6 +17,8 @@ import passwords
 
 # Flask app configuration
 app = Flask(__name__, template_folder='/home/computerclass422/photogallery2/Templates', static_url_path="")
+#app = Flask(__name__, static_url_path="")
+
 app.secret_key = passwords.APP_KEY
 
 UPLOAD_FOLDER = os.path.join(app.root_path, 'static', 'media')
@@ -204,18 +206,26 @@ def view_photo(photoID):
     cursor.execute("SELECT * FROM photos WHERE PhotoID = %s", (str(photoID),))
     photo = cursor.fetchone()
     if photo:
+        item = {}
+        item['PhotoID'] = photo[0]
+        item['CreationTime'] = photo[1]
+        item['Title'] = photo[2]
+        item['Description'] = photo[3]
+        item['Tags'] = photo[4]
+        item['URL'] = photo[5]
         tags = photo[4].split(',')
         exif_data = json.loads(photo[6])
         url = photo[5]
-        return render_template('photodetail.html', photo=photo, tags=tags, exifdata=exif_data, URL=url)
+        return render_template('photodetail.html', photo=item, tags=tags, exifdata=exif_data, URL=url)
     else:
         return not_found(None)
+
 
 @app.route('/search', methods=['GET'])
 def search_page():
     query = request.args.get('query', None)
     cursor = db.cursor()
-    cursor.execute("SELECT * FROM photos WHERE Title LIKE %s OR Description LIKE %s OR Tags LIKE %s", (f'%{query}%', f'%{query}%', f'%{query}%'))
+    cursor.execute("SELECT * FROM photos WHERE Title LIKE %s", (f'%{query}%',))
     photos = cursor.fetchall()
     filtered_items = [item for item in photos if item[7] == session.get('user')]
     items = []
