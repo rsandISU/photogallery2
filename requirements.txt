@@ -2,3 +2,4 @@ ExifRead~=3.0.0
 boto3~=1.34.47
 mysqlclient~=2.2.4
 flask~=3.0.2
+google~=3.0.0

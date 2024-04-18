@@ -1,14 +1,7 @@
 import MySQLdb
 #import sqlalchemy
-from flask import (
-    Flask,
-    jsonify,
-    request,
-    make_response,
-    render_template,
-    redirect,
-    session,
-)
+from flask import Flask, jsonify, request, make_response
+from flask import render_template, redirect, session
 from google.cloud import storage
 #from google.cloud.sql.connector import Connector, IPTypes, pymysql
 #from sqlalchemy import create_engine, insert, MetaData
