@@ -16,7 +16,7 @@ import passwords
 #from werkzeug.utils import secure_filename
 
 # Flask app configuration
-app = Flask(__name__, static_url_path="")
+app = Flask(__name__, template_folder='/home/computerclass422/photogallery2/Templates', static_url_path="")
 app.secret_key = passwords.APP_KEY
 
 UPLOAD_FOLDER = os.path.join(app.root_path, 'static', 'media')
@@ -98,7 +98,7 @@ def allowed_file(filename):
 def upload_file_to_gcs(file, filename_with_path, filename):
     blob = bucket.blob(filename)
     blob.upload_from_file(file)
-    return f"https://storage.cloud.google.com/{bucket.name}/{filename}"
+    return f"https://storage.googleapis.com/{bucket.name}/{filename}"
 
 
 
