@@ -43,7 +43,7 @@ bucket = storage_client.bucket(GCS_BUCKET_NAME)
 # Cloud SQL connection using Google's Cloud SQL Connector
 #connector = Connector()
 
-db = MySQLdb.connect(host=CLOUD_SQL_CONNECTION_NAME, user=CLOUD_SQL_USER, password=CLOUD_SQL_PASSWORD, db=CLOUD_SQL_DB_NAME)
+
 
 
 # function to return the database connection
@@ -130,6 +130,8 @@ def get_exif_data(path_name):
 @app.route('/', methods=['GET', 'POST'])
 def home_page():
     if 'logged_in' in session and session['logged_in']:
+        db = MySQLdb.connect(host=CLOUD_SQL_CONNECTION_NAME, user=CLOUD_SQL_USER, password=CLOUD_SQL_PASSWORD,
+                             db=CLOUD_SQL_DB_NAME)
         cursor = db.cursor()
         cursor.execute("SELECT * FROM photos WHERE UserID = %s", (session['user'],))
         photos = cursor.fetchall()
@@ -143,6 +145,7 @@ def home_page():
             photo['Tags'] = item[4]
             photo['URL'] = item[5]
             items.append(photo)
+        db.close()
         return render_template('index.html', photos=items)
     else:
         return redirect('/login')
@@ -154,19 +157,25 @@ def login():
             newusername = request.form['newusername']
             newpassword = request.form['newpassword']
             if newusername != "" and newpassword != "":
+                db = MySQLdb.connect(host=CLOUD_SQL_CONNECTION_NAME, user=CLOUD_SQL_USER, password=CLOUD_SQL_PASSWORD,
+                                     db=CLOUD_SQL_DB_NAME)
                 cursor = db.cursor()
                 cursor.execute("INSERT INTO users (UserID, Password) VALUES (%s, %s)", (newusername, newpassword))
                 db.commit()
                 session['logged_in'] = True
                 session['user'] = newusername
                 session['pass'] = newpassword
+                db.close()
                 return redirect('/')
         if 'username' in request.form and 'password' in request.form:
             username = request.form['username']
             password = request.form['password']
+            db = MySQLdb.connect(host=CLOUD_SQL_CONNECTION_NAME, user=CLOUD_SQL_USER, password=CLOUD_SQL_PASSWORD,
+                                 db=CLOUD_SQL_DB_NAME)
             cursor = db.cursor()
             cursor.execute("SELECT * FROM users WHERE UserID = %s AND Password = %s", (username, password))
             user = cursor.fetchone()
+            db.close()
             if user:
                 session['logged_in'] = True
                 session['user'] = username
@@ -192,19 +201,25 @@ def add_photo():
             exif_data = get_exif_data(filename_with_path)
             ts = time.time()
             timestamp = datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
+            db = MySQLdb.connect(host=CLOUD_SQL_CONNECTION_NAME, user=CLOUD_SQL_USER, password=CLOUD_SQL_PASSWORD,
+                                 db=CLOUD_SQL_DB_NAME)
             cursor = db.cursor()
             cursor.execute("INSERT INTO photos (PhotoID, CreationTime, Title, Description, Tags, URL, EXIF, UserID) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                            (str(int(ts)), timestamp, title, description, tags, uploaded_file_url, json.dumps(exif_data), session["user"]))
             db.commit()
+            db.close()
         return redirect('/')
     else:
         return render_template('form.html')
 
 @app.route('/<int:photoID>', methods=['GET'])
 def view_photo(photoID):
+    db = MySQLdb.connect(host=CLOUD_SQL_CONNECTION_NAME, user=CLOUD_SQL_USER, password=CLOUD_SQL_PASSWORD,
+                         db=CLOUD_SQL_DB_NAME)
     cursor = db.cursor()
     cursor.execute("SELECT * FROM photos WHERE PhotoID = %s", (str(photoID),))
     photo = cursor.fetchone()
+    db.close()
     if photo:
         item = {}
         item['PhotoID'] = photo[0]
@@ -224,10 +239,13 @@ def view_photo(photoID):
 @app.route('/search', methods=['GET'])
 def search_page():
     query = request.args.get('query', None)
+    db = MySQLdb.connect(host=CLOUD_SQL_CONNECTION_NAME, user=CLOUD_SQL_USER, password=CLOUD_SQL_PASSWORD,
+                         db=CLOUD_SQL_DB_NAME)
     cursor = db.cursor()
     cursor.execute("SELECT * FROM photos WHERE Title LIKE %s", (f'%{query}%',))
     photos = cursor.fetchall()
     filtered_items = [item for item in photos if item[7] == session.get('user')]
+    db.close()
     items = []
     for item in filtered_items:
         photo = {}
